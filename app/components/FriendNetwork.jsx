@@ -1,20 +1,14 @@
 'use client';
 
 /**
- * FriendNetwork — Graph visualization using React Flow (@xyflow/react)
+ * FriendNetwork — React Flow graph with inline double-click editing
  *
- * Install dependencies:
- *   npm install @xyflow/react
- *
- * Import the required CSS in your root layout:
- *   import '@xyflow/react/dist/style.css';
- *
- * Usage:
- *   import FriendNetwork from '@/components/FriendNetwork';
- *   export default function Page() { return <FriendNetwork />; }
+ * Install:  npm install @xyflow/react
+ * CSS:      import '@xyflow/react/dist/style.css'; // in root layout
+ * Usage:    import FriendNetwork from '@/components/FriendNetwork';
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -34,79 +28,104 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-// ─── Color palette ──────────────────────────────────────────────────────────
+// ─── Palette ─────────────────────────────────────────────────────────────────
 const PALETTE = [
-  { bg: '#dbeafe', border: '#3b82f6', text: '#1d4ed8' }, // blue
-  { bg: '#dcfce7', border: '#22c55e', text: '#15803d' }, // green
-  { bg: '#fee2e2', border: '#ef4444', text: '#b91c1c' }, // red
-  { bg: '#fde68a', border: '#f59e0b', text: '#92400e' }, // amber
-  { bg: '#ede9fe', border: '#8b5cf6', text: '#6d28d9' }, // violet
-  { bg: '#fce7f3', border: '#ec4899', text: '#9d174d' }, // pink
-  { bg: '#ccfbf1', border: '#14b8a6', text: '#0f766e' }, // teal
-  { bg: '#ffedd5', border: '#f97316', text: '#9a3412' }, // orange
+  { bg: '#dbeafe', border: '#3b82f6', text: '#1d4ed8' },
+  { bg: '#dcfce7', border: '#22c55e', text: '#15803d' },
+  { bg: '#fee2e2', border: '#ef4444', text: '#b91c1c' },
+  { bg: '#fde68a', border: '#f59e0b', text: '#92400e' },
+  { bg: '#ede9fe', border: '#8b5cf6', text: '#6d28d9' },
+  { bg: '#fce7f3', border: '#ec4899', text: '#9d174d' },
+  { bg: '#ccfbf1', border: '#14b8a6', text: '#0f766e' },
+  { bg: '#ffedd5', border: '#f97316', text: '#9a3412' },
 ];
 let colorCursor = 0;
 const pickColor = () => PALETTE[colorCursor++ % PALETTE.length];
 
-// ─── Unique ID helper ────────────────────────────────────────────────────────
 let uid = 10;
 const nextId = () => String(uid++);
 
-// ─── Relationship presets ────────────────────────────────────────────────────
-const RELATIONSHIP_TYPES = [
-  'เพื่อนสนิท',
-  'รู้จักกัน',
-  'เพื่อนร่วมงาน',
-  'ครอบครัว',
-  'เพื่อนเรียน',
-  'อื่นๆ',
-];
+const RELATIONSHIP_TYPES = ['เพื่อนสนิท', 'รู้จักกัน', 'เพื่อนร่วมงาน', 'ครอบครัว', 'เพื่อนเรียน', 'อื่นๆ'];
 
-// ─── Shared handle style (invisible until hover) ─────────────────────────────
 const handleStyle = {
-  width: 10,
-  height: 10,
-  background: '#94a3b8',
-  border: '2px solid white',
-  opacity: 0,
-  transition: 'opacity 0.2s',
+  width: 10, height: 10,
+  background: '#94a3b8', border: '2px solid white',
+  opacity: 0, transition: 'opacity 0.2s',
 };
 
-// ─── Custom Person Node ──────────────────────────────────────────────────────
-function PersonNode({ data, selected }) {
-  const { label, color, degree = 0 } = data;
-  const size = Math.max(52, Math.min(80, 52 + degree * 4));
-  const initials = label
-    .split(' ')
-    .map((w) => w[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
+// ─── Inline text input used inside node/edge ──────────────────────────────────
+function InlineInput({ value, onCommit, onCancel, style = {} }) {
+  const [text, setText] = useState(value);
+  const ref = useRef(null);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, userSelect: 'none' }}>
-      {/* Handles on all four sides */}
+    <input
+      ref={ref}
+      autoFocus
+      value={text}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => text.trim() ? onCommit(text.trim()) : onCancel()}
+      onKeyDown={(e) => {
+        e.stopPropagation(); // prevent ReactFlow from eating keys
+        if (e.key === 'Enter' && text.trim()) onCommit(text.trim());
+        if (e.key === 'Escape') onCancel();
+      }}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      style={{
+        border: '1.5px solid #3b82f6',
+        borderRadius: 8,
+        outline: 'none',
+        fontFamily: 'inherit',
+        background: 'white',
+        color: '#111',
+        boxShadow: '0 0 0 3px #3b82f620',
+        ...style,
+      }}
+    />
+  );
+}
+
+// ─── Custom Person Node ───────────────────────────────────────────────────────
+function PersonNode({ id, data, selected }) {
+  const { label, color, degree = 0, onRename } = data;
+  const [editing, setEditing] = useState(false);
+
+  const size = Math.max(52, Math.min(80, 52 + degree * 4));
+  const initials = label.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+
+  const handleDoubleClick = (e) => {
+    e.stopPropagation();
+    setEditing(true);
+  };
+
+  const commit = (val) => {
+    onRename(id, val);
+    setEditing(false);
+  };
+
+  return (
+    <div
+      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, userSelect: 'none' }}
+      onDoubleClick={handleDoubleClick}
+    >
       {[Position.Top, Position.Bottom, Position.Left, Position.Right].map((pos) => (
-        <>
-          <Handle key={`s-${pos}`} type="source" position={pos} style={handleStyle} />
-          <Handle key={`t-${pos}`} type="target" position={pos} style={handleStyle} />
-        </>
+        <span key={pos}>
+          <Handle type="source" position={pos} style={handleStyle} />
+          <Handle type="target" position={pos} style={handleStyle} />
+        </span>
       ))}
 
-      {/* Avatar */}
+      {/* Avatar circle */}
       <div style={{
         position: 'relative',
-        width: size, height: size,
-        borderRadius: '50%',
+        width: size, height: size, borderRadius: '50%',
         background: color.bg,
         border: `2.5px solid ${selected ? color.border : color.border + '88'}`,
         boxShadow: selected ? `0 0 0 4px ${color.border}33` : '0 2px 8px rgba(0,0,0,0.10)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: Math.max(14, size * 0.28),
-        fontWeight: 700,
-        color: color.text,
-        transition: 'all 0.15s ease',
-        cursor: 'grab',
+        fontSize: Math.max(14, size * 0.28), fontWeight: 700, color: color.text,
+        transition: 'all 0.15s', cursor: 'grab',
       }}>
         {initials}
         {degree > 0 && (
@@ -122,69 +141,101 @@ function PersonNode({ data, selected }) {
         )}
       </div>
 
-      {/* Name label */}
-      <div style={{
-        background: 'white',
-        border: `1px solid ${color.border}55`,
-        borderRadius: 20, padding: '2px 10px',
-        fontSize: 12, fontWeight: 600, color: color.text,
-        whiteSpace: 'nowrap', maxWidth: 120,
-        overflow: 'hidden', textOverflow: 'ellipsis',
-        boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
-      }}>
-        {label}
-      </div>
+      {/* Name label — shows input when editing */}
+      {editing ? (
+        <InlineInput
+          value={label}
+          onCommit={commit}
+          onCancel={() => setEditing(false)}
+          style={{ width: 100, padding: '3px 8px', fontSize: 12, textAlign: 'center' }}
+        />
+      ) : (
+        <div
+          title="ดับเบิ้ลคลิกเพื่อแก้ไขชื่อ"
+          style={{
+            background: editing ? 'transparent' : 'white',
+            border: `1px solid ${color.border}55`,
+            borderRadius: 20, padding: '2px 10px',
+            fontSize: 12, fontWeight: 600, color: color.text,
+            whiteSpace: 'nowrap', maxWidth: 120,
+            overflow: 'hidden', textOverflow: 'ellipsis',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+            cursor: 'text',
+          }}
+        >
+          {label}
+        </div>
+      )}
     </div>
   );
 }
 
-// ─── Custom Relationship Edge ────────────────────────────────────────────────
-function RelationshipEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, selected, markerEnd }) {
+// ─── Custom Relationship Edge ─────────────────────────────────────────────────
+function RelationshipEdge({
+  id, sourceX, sourceY, targetX, targetY,
+  sourcePosition, targetPosition,
+  data, selected, markerEnd,
+}) {
+  const [editing, setEditing] = useState(false);
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
+
+  const commit = (val) => {
+    data?.onRenameEdge?.(id, val);
+    setEditing(false);
+  };
 
   return (
     <>
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        markerEnd={markerEnd}
-        style={{
-          stroke: selected ? '#3b82f6' : '#94a3b8',
-          strokeWidth: selected ? 2.5 : 1.5,
-          transition: 'stroke 0.15s, stroke-width 0.15s',
-        }}
-      />
-      {data?.label && (
-        <EdgeLabelRenderer>
-          <div
-            className="nodrag nopan"
-            style={{
-              position: 'absolute',
-              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-              pointerEvents: 'all',
-              background: selected ? '#eff6ff' : 'white',
-              border: `1px solid ${selected ? '#3b82f6' : '#e2e8f0'}`,
-              borderRadius: 12, padding: '2px 8px',
-              fontSize: 11, fontWeight: 500,
-              color: selected ? '#1d4ed8' : '#64748b',
-              whiteSpace: 'nowrap',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-              transition: 'all 0.15s',
-              cursor: 'pointer',
-            }}
-          >
-            {data.label}
-          </div>
-        </EdgeLabelRenderer>
-      )}
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={{
+        stroke: selected ? '#3b82f6' : '#94a3b8',
+        strokeWidth: selected ? 2.5 : 1.5,
+        transition: 'stroke 0.15s, stroke-width 0.15s',
+      }} />
+
+      <EdgeLabelRenderer>
+        <div
+          className="nodrag nopan"
+          style={{
+            position: 'absolute',
+            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            pointerEvents: 'all',
+            zIndex: 10,
+          }}
+          onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
+        >
+          {editing ? (
+            <InlineInput
+              value={data?.label ?? ''}
+              onCommit={commit}
+              onCancel={() => setEditing(false)}
+              style={{ width: 110, padding: '2px 8px', fontSize: 11, textAlign: 'center' }}
+            />
+          ) : (
+            <div
+              title="ดับเบิ้ลคลิกเพื่อแก้ไขความสัมพันธ์"
+              style={{
+                background: selected ? '#eff6ff' : 'white',
+                border: `1px solid ${selected ? '#3b82f6' : '#e2e8f0'}`,
+                borderRadius: 12, padding: '3px 10px',
+                fontSize: 11, fontWeight: 500,
+                color: selected ? '#1d4ed8' : '#64748b',
+                whiteSpace: 'nowrap',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                transition: 'all 0.15s',
+                cursor: 'text',
+                minWidth: 40, textAlign: 'center',
+              }}
+            >
+              {data?.label || <span style={{ opacity: 0.4 }}>—</span>}
+            </div>
+          )}
+        </div>
+      </EdgeLabelRenderer>
     </>
   );
 }
 
-const nodeTypes = { person: PersonNode };
-const edgeTypes = { relationship: RelationshipEdge };
-
-// ─── Initial graph data ──────────────────────────────────────────────────────
+// ─── Seed data ────────────────────────────────────────────────────────────────
 const seedNodes = [
   { id: '1', type: 'person', position: { x: 200, y: 180 }, data: { label: 'อลิส',   color: PALETTE[0] } },
   { id: '2', type: 'person', position: { x: 420, y: 80  }, data: { label: 'บ็อบ',    color: PALETTE[1] } },
@@ -205,14 +256,11 @@ const seedEdges = [
 function withDegrees(nodes, edges) {
   return nodes.map((n) => ({
     ...n,
-    data: {
-      ...n.data,
-      degree: edges.filter((e) => e.source === n.id || e.target === n.id).length,
-    },
+    data: { ...n.data, degree: edges.filter((e) => e.source === n.id || e.target === n.id).length },
   }));
 }
 
-// ─── Modal components ────────────────────────────────────────────────────────
+// ─── Modal primitives ─────────────────────────────────────────────────────────
 function Modal({ title, children }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
@@ -223,7 +271,6 @@ function Modal({ title, children }) {
     </div>
   );
 }
-
 function ModalActions({ onCancel, onConfirm, confirmLabel = 'ตกลง', disabled }) {
   return (
     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
@@ -237,11 +284,10 @@ function AddPersonModal({ onConfirm, onCancel }) {
   const [name, setName] = useState('');
   return (
     <Modal title="เพิ่มบุคคลใหม่">
-      <input
-        autoFocus value={name} onChange={(e) => setName(e.target.value)}
+      <input autoFocus value={name} onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onConfirm(name.trim()); if (e.key === 'Escape') onCancel(); }}
         placeholder="ชื่อบุคคล..."
-        style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 8, border: '1px solid #d1d5db', outline: 'none', boxSizing: 'border-box' }}
+        style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 8, border: '1px solid #d1d5db', outline: 'none', boxSizing: 'border-box', color: '#111' }}
       />
       <ModalActions onCancel={onCancel} onConfirm={() => name.trim() && onConfirm(name.trim())} confirmLabel="เพิ่ม" disabled={!name.trim()} />
     </Modal>
@@ -267,8 +313,7 @@ function AddEdgeModal({ onConfirm, onCancel }) {
         ))}
       </div>
       {isCustom && (
-        <input
-          autoFocus value={custom} onChange={(e) => setCustom(e.target.value)}
+        <input autoFocus value={custom} onChange={(e) => setCustom(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && label) onConfirm(label); if (e.key === 'Escape') onCancel(); }}
           placeholder="ระบุความสัมพันธ์..."
           style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 8, border: '1px solid #d1d5db', outline: 'none', boxSizing: 'border-box', marginTop: 4 }}
@@ -279,43 +324,86 @@ function AddEdgeModal({ onConfirm, onCancel }) {
   );
 }
 
-function RenameModal({ current, onConfirm, onCancel }) {
-  const [name, setName] = useState(current);
-  return (
-    <Modal title="แก้ไขชื่อ">
-      <input
-        autoFocus value={name} onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onConfirm(name.trim()); if (e.key === 'Escape') onCancel(); }}
-        style={{ width: '100%', padding: '8px 12px', fontSize: 13, borderRadius: 8, border: '1px solid #d1d5db', outline: 'none', boxSizing: 'border-box' }}
-      />
-      <ModalActions onCancel={onCancel} onConfirm={() => name.trim() && onConfirm(name.trim())} confirmLabel="บันทึก" disabled={!name.trim()} />
-    </Modal>
-  );
-}
-
-// ─── Toolbar button style helper ─────────────────────────────────────────────
 const toolBtn = (bg, color, border) => ({
   fontSize: 12, padding: '5px 12px', borderRadius: 20,
   border: `1px solid ${border}`, background: bg, color,
   cursor: 'pointer', fontWeight: 500,
 });
 
-// ─── Main inner component ────────────────────────────────────────────────────
+// ─── Node & edge type maps (defined outside component to avoid remounts) ──────
+const nodeTypes = { person: PersonNode };
+const edgeTypes = { relationship: RelationshipEdge };
+
+// ─── Main component ───────────────────────────────────────────────────────────
 function FriendNetworkInner() {
-  const [nodes, setNodes, onNodesChange] = useNodesState(withDegrees(seedNodes, seedEdges));
-  const [edges, setEdges, onEdgesChange] = useEdgesState(seedEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [modal, setModal] = useState(null);
   const [pendingEdge, setPendingEdge] = useState(null);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const hasSelection = nodes.some((n) => n.selected) || edges.some((e) => e.selected);
+
+  // ── callback refs so handlers always see fresh state ──────────────────────
+  const setNodesRef = useRef(setNodes);
+  setNodesRef.current = setNodes;
+  const setEdgesRef = useRef(setEdges);
+  setEdgesRef.current = setEdges;
+
+  // ── rename node (called from PersonNode via data.onRename) ─────────────────
+  const onRenameNode = useCallback((nodeId, newLabel) => {
+    setNodesRef.current((nds) =>
+      nds.map((n) => n.id === nodeId ? { ...n, data: { ...n.data, label: newLabel } } : n)
+    );
+  }, []);
+
+  // ── rename edge label (called from RelationshipEdge via data.onRenameEdge) ──
+  const onRenameEdge = useCallback((edgeId, newLabel) => {
+    setEdgesRef.current((eds) =>
+      eds.map((e) => e.id === edgeId ? { ...e, data: { ...e.data, label: newLabel } } : e)
+    );
+  }, []);
+
+  // ── inject callbacks + degree into node data ───────────────────────────────
+  const enrichNodes = useCallback((rawNodes, rawEdges) =>
+    rawNodes.map((n) => ({
+      ...n,
+      data: {
+        ...n.data,
+        degree: rawEdges.filter((e) => e.source === n.id || e.target === n.id).length,
+        onRename: onRenameNode,
+      },
+    })), [onRenameNode]);
+
+  // ── inject onRenameEdge callback into every edge ───────────────────────────
+  const enrichEdges = useCallback((rawEdges) =>
+    rawEdges.map((e) => ({
+      ...e,
+      data: { ...e.data, onRenameEdge },
+    })), [onRenameEdge]);
+
+  // ── initialise with seed data ──────────────────────────────────────────────
+  const initialised = useRef(false);
+  if (!initialised.current) {
+    initialised.current = true;
+    const richEdges = enrichEdges(seedEdges);
+    const richNodes = enrichNodes(seedNodes, richEdges);
+    // directly mutate the initial state arrays before first render
+    nodes.length = 0; nodes.push(...richNodes);
+    edges.length = 0; edges.push(...richEdges);
+  }
 
   const refreshDegrees = useCallback((nextEdges) => {
-    setNodes((nds) =>
+    setNodesRef.current((nds) =>
       nds.map((n) => ({
         ...n,
-        data: { ...n.data, degree: nextEdges.filter((e) => e.source === n.id || e.target === n.id).length },
+        data: {
+          ...n.data,
+          degree: nextEdges.filter((e) => e.source === n.id || e.target === n.id).length,
+          onRename: onRenameNode,
+        },
       }))
     );
-  }, [setNodes]);
+  }, [onRenameNode]);
 
   const onConnect = useCallback((params) => {
     setPendingEdge(params);
@@ -324,52 +412,50 @@ function FriendNetworkInner() {
 
   const confirmAddEdge = useCallback((label) => {
     if (!pendingEdge) return;
-    setEdges((eds) => {
-      const next = addEdge({ ...pendingEdge, id: `e${Date.now()}`, type: 'relationship', data: { label } }, eds);
+    setEdgesRef.current((eds) => {
+      const newEdge = {
+        ...pendingEdge,
+        id: `e${Date.now()}`,
+        type: 'relationship',
+        data: { label, onRenameEdge },
+      };
+      const next = addEdge(newEdge, eds);
       refreshDegrees(next);
       return next;
     });
     setPendingEdge(null);
     setModal(null);
-  }, [pendingEdge, setEdges, refreshDegrees]);
+  }, [pendingEdge, onRenameEdge, refreshDegrees]);
 
   const confirmAddPerson = useCallback((name) => {
     const id = nextId();
-    setNodes((nds) => [
+    setNodesRef.current((nds) => [
       ...nds,
       {
         id, type: 'person',
-        position: { x: 80 + Math.random() * 420, y: 80 + Math.random() * 320 },
-        data: { label: name, color: pickColor(), degree: 0 },
+        position: { x: 80 + Math.random() * 420, y: 80 + Math.random() * 300 },
+        data: { label: name, color: pickColor(), degree: 0, onRename: onRenameNode },
       },
     ]);
     setModal(null);
-  }, [setNodes]);
-
-  const confirmRename = useCallback((name) => {
-    setNodes((nds) => nds.map((n) => n.id === selectedNodeId ? { ...n, data: { ...n.data, label: name } } : n));
-    setModal(null);
-  }, [selectedNodeId, setNodes]);
+  }, [onRenameNode]);
 
   const deleteSelected = useCallback(() => {
-    setNodes((nds) => {
+    setNodesRef.current((nds) => {
       const keep = nds.filter((n) => !n.selected);
       const keepIds = new Set(keep.map((n) => n.id));
-      setEdges((eds) => {
+      setEdgesRef.current((eds) => {
         const next = eds.filter((e) => !e.selected && keepIds.has(e.source) && keepIds.has(e.target));
         setTimeout(() => refreshDegrees(next), 0);
         return next;
       });
       return keep;
     });
-  }, [setNodes, setEdges, refreshDegrees]);
+  }, [refreshDegrees]);
 
   const onSelectionChange = useCallback(({ nodes: sel }) => {
     setSelectedNodeId(sel.length === 1 ? sel[0].id : null);
   }, []);
-
-  const selectedNode = nodes.find((n) => n.id === selectedNodeId);
-  const hasSelection = nodes.some((n) => n.selected) || edges.some((e) => e.selected);
 
   return (
     <div style={{ width: '100%', height: '100vh' }}>
@@ -399,56 +485,41 @@ function FriendNetworkInner() {
             padding: '10px 14px', boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
           }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#111', marginRight: 4 }}>Friend Network</span>
-
-            <button onClick={() => setModal('addPerson')} style={toolBtn('#dbeafe', '#1d4ed8', '#bfdbfe')}>
-              + เพิ่มคน
-            </button>
-
-            {selectedNodeId && (
-              <button onClick={() => setModal('rename')} style={toolBtn('#f3f4f6', '#374151', '#e5e7eb')}>
-                ✏️ แก้ไขชื่อ
-              </button>
-            )}
-
+            <button onClick={() => setModal('addPerson')} style={toolBtn('#dbeafe', '#1d4ed8', '#bfdbfe')}>+ เพิ่มคน</button>
             {hasSelection && (
-              <button onClick={deleteSelected} style={toolBtn('#fee2e2', '#b91c1c', '#fecaca')}>
-                🗑 ลบที่เลือก
-              </button>
+              <button onClick={deleteSelected} style={toolBtn('#fee2e2', '#b91c1c', '#fecaca')}>🗑 ลบที่เลือก</button>
             )}
-
             <div style={{ width: 1, height: 20, background: '#e2e8f0', margin: '0 2px' }} />
-
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>
-              {nodes.length} คน · {edges.length} ความสัมพันธ์
-            </span>
+            <span style={{ fontSize: 11, color: '#94a3b8' }}>{nodes.length} คน · {edges.length} ความสัมพันธ์</span>
           </div>
         </Panel>
 
-        {/* Help hints */}
+        {/* Help */}
         <Panel position="bottom-left">
           <div style={{
             background: 'white', border: '1px solid #e2e8f0', borderRadius: 10,
             padding: '8px 12px', fontSize: 11, color: '#94a3b8', lineHeight: 1.9,
             boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
           }}>
-            <div>🖱 ลากโหนดเพื่อย้าย</div>
+            <div>✏️ ดับเบิ้ลคลิก Node/ชื่อความสัมพันธ์ เพื่อแก้ไขได้เลย</div>
             <div>↔ ลากจากจุด handle เพื่อเชื่อมความสัมพันธ์</div>
             <div>⌫ กด Backspace / Delete เพื่อลบ</div>
-            <div>🔍 Scroll เพื่อ Zoom · ดับเบิ้ลคลิกพื้นหลังเพื่อ Reset view</div>
+            <div>🔍 Scroll เพื่อ Zoom</div>
           </div>
         </Panel>
       </ReactFlow>
 
       {modal === 'addPerson' && <AddPersonModal onConfirm={confirmAddPerson} onCancel={() => setModal(null)} />}
-      {modal === 'addEdge'   && <AddEdgeModal   onConfirm={confirmAddEdge}   onCancel={() => { setModal(null); setPendingEdge(null); }} />}
-      {modal === 'rename' && selectedNode && (
-        <RenameModal current={selectedNode.data.label} onConfirm={confirmRename} onCancel={() => setModal(null)} />
+      {modal === 'addEdge' && (
+        <AddEdgeModal
+          onConfirm={confirmAddEdge}
+          onCancel={() => { setModal(null); setPendingEdge(null); }}
+        />
       )}
     </div>
   );
 }
 
-// Wrap with ReactFlowProvider (required when used inside Next.js App Router)
 export default function FriendNetwork() {
   return (
     <ReactFlowProvider>
